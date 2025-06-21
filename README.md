@@ -1,6 +1,6 @@
 # FET Characterization Tool
 
-A comprehensive PyQt5-based application for real-time characterization and analysis of field-effect transistors using Keithley 2401 (drain/source) and Keithley 2635A (back-gate) SourceMeter units.
+This application provides a modern PyQt5 GUI for real-time characterization of field-effect transistors using Keithley 2401 (drain/source) and Keithley 2635A (back-gate) SourceMeter units.
 
 ## Features
 
@@ -150,6 +150,4 @@ fet_characterization/
 - **Linear Fitting**: Ensure selected region contains sufficient data points
 
 ## License
-
-This project is provided as-is for educational and research purposes.
-
+MIT 
