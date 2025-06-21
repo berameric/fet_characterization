@@ -8,6 +8,7 @@ python-dateutil==2.9.0.post0
 pytz==2025.2
 PyVISA==1.15.0
 PyVISA-py==0.8.0
+scipy==1.15.0
 six==1.17.0
 typing_extensions==4.14.0
 tzdata==2025.2

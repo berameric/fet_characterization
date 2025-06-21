@@ -10,6 +10,9 @@ from typing import Optional
 import math
 
 from PyQt5 import QtWidgets, QtCore, QtGui
+import pyqtgraph as pg
+import numpy as np
+from scipy import stats
 
 from keithley2401_controller import Keithley2401
 from keithley2635a_controller import Keithley2635A
@@ -503,6 +506,415 @@ class TransferTab(BaseTab):
             self.progress_lbl.setText(txt)
 
 
+class CalculationTab(QtWidgets.QWidget):
+    """Tab for loading and visualizing CSV data files."""
+    
+    def __init__(self, parent: Optional[QtWidgets.QWidget] = None):
+        super().__init__(parent)
+        
+        # Horizontal main layout -> left panel (controls) + right (plot)
+        hlayout = QtWidgets.QHBoxLayout(self)
+        
+        # ------------------------------------------------------------------
+        # LEFT: control panel
+        # ------------------------------------------------------------------
+        self.control_panel = QtWidgets.QWidget()
+        control_vlayout = QtWidgets.QVBoxLayout(self.control_panel)
+        control_vlayout.setContentsMargins(8, 8, 8, 8)
+        control_vlayout.setSpacing(10)
+        
+        # File selection group
+        file_group = QtWidgets.QGroupBox("CSV File Selection")
+        file_group.setStyleSheet(
+            "QGroupBox { font-weight: bold; border: 1px solid gray; border-radius: 4px; margin-top: 6px; }"
+            "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 3px 0 3px; }"
+        )
+        file_layout = QtWidgets.QVBoxLayout()
+        
+        # File path display and browse button
+        self.file_path_le = QtWidgets.QLineEdit()
+        self.file_path_le.setPlaceholderText("No file selected")
+        self.file_path_le.setReadOnly(True)
+        
+        self.browse_btn = QtWidgets.QPushButton("Browse CSV File...")
+        self.browse_btn.clicked.connect(self._browse_csv_file)
+        
+        self.load_btn = QtWidgets.QPushButton("Load File")
+        self.load_btn.clicked.connect(self._load_csv_file)
+        self.load_btn.setEnabled(False)
+        
+        file_layout.addWidget(self.file_path_le)
+        file_layout.addWidget(self.browse_btn)
+        file_layout.addWidget(self.load_btn)
+        file_group.setLayout(file_layout)
+        control_vlayout.addWidget(file_group)
+        
+        # Column selection group
+        self.column_group = QtWidgets.QGroupBox("Column Selection")
+        self.column_group.setStyleSheet(
+            "QGroupBox { font-weight: bold; border: 1px solid gray; border-radius: 4px; margin-top: 6px; }"
+            "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 3px 0 3px; }"
+        )
+        column_layout = QtWidgets.QFormLayout()
+        
+        self.x_column_cb = QtWidgets.QComboBox()
+        self.y_column_cb = QtWidgets.QComboBox()
+        self.group_column_cb = QtWidgets.QComboBox()
+        self.group_column_cb.addItem("None (single curve)")
+        
+        # Auto-detect button
+        self.auto_detect_btn = QtWidgets.QPushButton("Auto-detect FET")
+        self.auto_detect_btn.clicked.connect(self._auto_detect_fet_columns)
+        self.auto_detect_btn.setEnabled(False)
+        
+        # Plot button
+        self.plot_btn = QtWidgets.QPushButton("Plot Data")
+        self.plot_btn.clicked.connect(self._plot_data)
+        self.plot_btn.setEnabled(False)
+        
+        column_layout.addRow("X-axis column:", self.x_column_cb)
+        column_layout.addRow("Y-axis column:", self.y_column_cb)
+        column_layout.addRow("Group by:", self.group_column_cb)
+        column_layout.addRow("", self.auto_detect_btn)
+        column_layout.addRow("", self.plot_btn)
+        
+        self.column_group.setLayout(column_layout)
+        self.column_group.setEnabled(False)
+        control_vlayout.addWidget(self.column_group)
+        
+        # Linear fitting group
+        self.linear_group = QtWidgets.QGroupBox("Linear Region Analysis")
+        self.linear_group.setStyleSheet(
+            "QGroupBox { font-weight: bold; border: 1px solid gray; border-radius: 4px; margin-top: 6px; }"
+            "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 3px 0 3px; }"
+        )
+        linear_layout = QtWidgets.QVBoxLayout()
+        
+        # Enable/disable linear region selection
+        self.enable_linear_cb = QtWidgets.QCheckBox("Enable Linear Region Selection")
+        self.enable_linear_cb.toggled.connect(self._toggle_linear_region)
+        linear_layout.addWidget(self.enable_linear_cb)
+        
+        # Buttons for linear analysis
+        btn_layout = QtWidgets.QHBoxLayout()
+        self.fit_btn = QtWidgets.QPushButton("Fit Linear")
+        self.fit_btn.clicked.connect(self._fit_linear_region)
+        self.fit_btn.setEnabled(False)
+        
+        self.clear_fit_btn = QtWidgets.QPushButton("Clear Fit")
+        self.clear_fit_btn.clicked.connect(self._clear_linear_fit)
+        self.clear_fit_btn.setEnabled(False)
+        
+        btn_layout.addWidget(self.fit_btn)
+        btn_layout.addWidget(self.clear_fit_btn)
+        linear_layout.addLayout(btn_layout)
+        
+        # Results display
+        self.fit_results_label = QtWidgets.QLabel("No fit performed")
+        self.fit_results_label.setWordWrap(True)
+        self.fit_results_label.setStyleSheet("QLabel { background-color: #f0f0f0; color: #000000; padding: 5px; border: 1px solid #ccc; font-family: monospace; }")
+        linear_layout.addWidget(self.fit_results_label)
+        
+        self.linear_group.setLayout(linear_layout)
+        self.linear_group.setEnabled(False)
+        control_vlayout.addWidget(self.linear_group)
+        
+        # Info group
+        info_group = QtWidgets.QGroupBox("File Information")
+        info_group.setStyleSheet(
+            "QGroupBox { font-weight: bold; border: 1px solid gray; border-radius: 4px; margin-top: 6px; }"
+            "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 3px 0 3px; }"
+        )
+        self.info_label = QtWidgets.QLabel("No file loaded")
+        self.info_label.setWordWrap(True)
+        info_layout = QtWidgets.QVBoxLayout()
+        info_layout.addWidget(self.info_label)
+        info_group.setLayout(info_layout)
+        control_vlayout.addWidget(info_group)
+        
+        # Push everything up and leave space at the bottom
+        control_vlayout.addStretch()
+        
+        # Set fixed width for control panel
+        self.control_panel.setMaximumWidth(300)
+        hlayout.addWidget(self.control_panel, 0)
+        
+        # ------------------------------------------------------------------
+        # RIGHT: plot area
+        # ------------------------------------------------------------------
+        pg.setConfigOptions(antialias=True)
+        
+        self.plot_widget = pg.PlotWidget(title="CSV Data Visualization")
+        self.plot_widget.setLabel("left", "Current", units="A")
+        self.plot_widget.setLabel("bottom", "Voltage", units="V")
+        self.plot_widget.showGrid(True, True)
+        self.plot_widget.setBackground('k')  # Dark background
+        hlayout.addWidget(self.plot_widget, 1)
+        
+        # Store loaded data
+        self.loaded_data = None
+        
+        # Linear region selection
+        self.linear_region = None
+        self.fit_line = None
+    
+    def _browse_csv_file(self):
+        """Open file dialog to select CSV file."""
+        file_path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, 
+            "Select CSV File", 
+            str(Path.cwd()), 
+            "CSV Files (*.csv);;All Files (*)"
+        )
+        if file_path:
+            self.file_path_le.setText(file_path)
+            self.load_btn.setEnabled(True)
+    
+    def _load_csv_file(self):
+        """Load the selected CSV file and populate column selectors."""
+        file_path = self.file_path_le.text()
+        if not file_path or not Path(file_path).exists():
+            QtWidgets.QMessageBox.warning(self, "Error", "Please select a valid CSV file.")
+            return
+        
+        try:
+            import pandas as pd
+            
+            # Load CSV data
+            self.loaded_data = pd.read_csv(file_path)
+            
+            # Get column names
+            columns = self.loaded_data.columns.tolist()
+            numeric_cols = self.loaded_data.select_dtypes(include=['number']).columns.tolist()
+            
+            # Populate column selectors
+            for cb in (self.x_column_cb, self.y_column_cb):
+                cb.clear()
+                cb.addItems(numeric_cols)
+            
+            # Populate group column selector
+            self.group_column_cb.clear()
+            self.group_column_cb.addItem("None (single curve)")
+            self.group_column_cb.addItems(columns)
+            
+            # Set default selections if possible
+            if len(numeric_cols) >= 2:
+                self.x_column_cb.setCurrentText(numeric_cols[0])
+                self.y_column_cb.setCurrentText(numeric_cols[1])
+            
+            # Enable column selection and buttons
+            self.column_group.setEnabled(True)
+            self.auto_detect_btn.setEnabled(True)
+            self.plot_btn.setEnabled(True)
+            
+            # Update info label
+            rows, cols = self.loaded_data.shape
+            self.info_label.setText(f"File: {Path(file_path).name}\nRows: {rows}\nColumns: {cols}\nColumns: {', '.join(columns)}")
+            
+            # Auto-detect FET columns if available
+            if all(col in columns for col in ['Vg', 'Vd', 'Id']):
+                self._auto_detect_fet_columns()
+            
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error Loading File", f"Failed to load CSV file:\n{str(e)}")
+    
+    def _auto_detect_fet_columns(self):
+        """Auto-detect and set FET measurement columns."""
+        if self.loaded_data is None:
+            return
+        
+        columns = self.loaded_data.columns.tolist()
+        
+        # Set standard FET columns if available
+        if 'Vd' in columns:
+            self.x_column_cb.setCurrentText('Vd')
+        elif 'Vg' in columns:
+            self.x_column_cb.setCurrentText('Vg')
+        
+        if 'Id' in columns:
+            self.y_column_cb.setCurrentText('Id')
+        
+        # Determine grouping based on data structure
+        if all(col in columns for col in ['Vg', 'Vd', 'Id']):
+            unique_vg = len(self.loaded_data['Vg'].unique())
+            unique_vd = len(self.loaded_data['Vd'].unique())
+            
+            if unique_vg > unique_vd:
+                # Transfer mode: group by Vd
+                self.x_column_cb.setCurrentText('Vg')
+                self.group_column_cb.setCurrentText('Vd')
+            else:
+                # Output mode: group by Vg
+                self.x_column_cb.setCurrentText('Vd')
+                self.group_column_cb.setCurrentText('Vg')
+    
+    def _plot_data(self):
+        """Plot data using selected columns."""
+        if self.loaded_data is None:
+            QtWidgets.QMessageBox.warning(self, "Error", "No data loaded.")
+            return
+        
+        x_col = self.x_column_cb.currentText()
+        y_col = self.y_column_cb.currentText()
+        group_col = self.group_column_cb.currentText()
+        
+        if not x_col or not y_col:
+            QtWidgets.QMessageBox.warning(self, "Error", "Please select both X and Y columns.")
+            return
+        
+        try:
+            # Clear previous plot and linear fit
+            self.plot_widget.clear()
+            if self.fit_line is not None:
+                self.fit_line = None
+            if self.linear_region is not None:
+                self.linear_region = None
+            self.fit_results_label.setText("No fit performed")
+            
+            # Set axis labels
+            self.plot_widget.setLabel("bottom", x_col)
+            self.plot_widget.setLabel("left", y_col)
+            
+            if group_col == "None (single curve)" or group_col not in self.loaded_data.columns:
+                # Single curve
+                pen = pg.mkPen(color='b', width=2)
+                self.plot_widget.plot(
+                    self.loaded_data[x_col], self.loaded_data[y_col],
+                    pen=pen, symbol='o', symbolSize=4
+                )
+            else:
+                # Multiple curves grouped by selected column
+                unique_groups = sorted(self.loaded_data[group_col].unique())
+                colors = ['b', 'r', 'g', 'c', 'm', 'y', 'k']
+                
+                for i, group_val in enumerate(unique_groups):
+                    subset = self.loaded_data[self.loaded_data[group_col] == group_val]
+                    if not subset.empty:
+                        color = colors[i % len(colors)]
+                        pen = pg.mkPen(color=color, width=2)
+                        self.plot_widget.plot(
+                            subset[x_col], subset[y_col],
+                            pen=pen, symbol='o', symbolSize=4,
+                            name=f"{group_col}={group_val:.3g}"
+                        )
+            
+            # Enable linear analysis group
+            self.linear_group.setEnabled(True)
+            
+            # If linear region was enabled, re-enable it for the new plot
+            if self.enable_linear_cb.isChecked():
+                self.enable_linear_cb.setChecked(False)  # This will clear any existing region
+                self.enable_linear_cb.setChecked(True)   # This will create a new region for the new data
+                        
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error Plotting", f"Failed to plot data:\n{str(e)}")
+    
+    def _toggle_linear_region(self, checked: bool):
+        """Enable/disable linear region selection on the plot."""
+        if checked and self.loaded_data is not None:
+            # Create linear region selector if it doesn't exist
+            if self.linear_region is None:
+                # Get data range for initial region
+                x_col = self.x_column_cb.currentText()
+                if x_col and x_col in self.loaded_data.columns:
+                    x_data = self.loaded_data[x_col].values
+                    x_min, x_max = x_data.min(), x_data.max()
+                    region_start = x_min + 0.2 * (x_max - x_min)
+                    region_end = x_min + 0.8 * (x_max - x_min)
+                    
+                    self.linear_region = pg.LinearRegionItem(values=[region_start, region_end])
+                    self.linear_region.setZValue(10)  # Put region on top
+                    self.plot_widget.addItem(self.linear_region)
+                    
+            self.fit_btn.setEnabled(True)
+            self.clear_fit_btn.setEnabled(True)
+        else:
+            # Remove linear region selector
+            if self.linear_region is not None:
+                self.plot_widget.removeItem(self.linear_region)
+                self.linear_region = None
+            self.fit_btn.setEnabled(False)
+            self.clear_fit_btn.setEnabled(False)
+            self._clear_linear_fit()
+    
+    def _fit_linear_region(self):
+        """Fit a linear line to the selected region."""
+        if self.loaded_data is None:
+            QtWidgets.QMessageBox.warning(self, "Error", "No data loaded.")
+            return
+        
+        if self.linear_region is None:
+            QtWidgets.QMessageBox.warning(self, "Error", "Please enable linear region selection first.")
+            return
+        
+        x_col = self.x_column_cb.currentText()
+        y_col = self.y_column_cb.currentText()
+        
+        if not x_col or not y_col:
+            QtWidgets.QMessageBox.warning(self, "Error", "Please select both X and Y columns.")
+            return
+        
+        try:
+            # Get selected region bounds
+            region_bounds = self.linear_region.getRegion()
+            x_min, x_max = min(region_bounds), max(region_bounds)
+            
+            # Filter data to selected region
+            x_data = self.loaded_data[x_col].values
+            y_data = self.loaded_data[y_col].values
+            
+            # Create mask for data within region
+            mask = (x_data >= x_min) & (x_data <= x_max)
+            x_region = x_data[mask]
+            y_region = y_data[mask]
+            
+            if len(x_region) < 2:
+                QtWidgets.QMessageBox.warning(self, "Error", "Not enough data points in selected region.")
+                return
+            
+            # Perform linear regression
+            slope, intercept, r_value, p_value, std_err = stats.linregress(x_region, y_region)
+            
+            # Remove previous fit line if it exists
+            if self.fit_line is not None:
+                self.plot_widget.removeItem(self.fit_line)
+            
+            # Plot linear fit line
+            x_fit = np.linspace(x_min, x_max, 100)
+            y_fit = slope * x_fit + intercept
+            self.fit_line = self.plot_widget.plot(x_fit, y_fit, pen=pg.mkPen(color='r', width=3, style=QtCore.Qt.DashLine))
+            
+            # Calculate FET-specific parameters
+            threshold_voltage = -intercept / slope if slope != 0 else float('inf')
+            transconductance = slope  # For Id vs Vg, slope is transconductance
+            
+            # Update results display
+            results_text = (
+                f"Linear Fit Results:\n"
+                f"Slope (gm): {slope:.6e} S\n"
+                f"Intercept: {intercept:.6e} A\n"
+                f"Threshold Voltage (Vth): {threshold_voltage:.4f} V\n"
+                f"Transconductance: {transconductance:.6e} S\n"
+                f"R-squared: {r_value**2:.6f}\n"
+                f"Correlation: {r_value:.6f}\n"
+                f"P-value: {p_value:.6e}\n"
+                f"Std Error: {std_err:.6e}\n"
+                f"Region: [{x_min:.3f}, {x_max:.3f}] V\n"
+                f"Points: {len(x_region)}"
+            )
+            self.fit_results_label.setText(results_text)
+            
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Error Fitting", f"Failed to fit linear region:\n{str(e)}")
+    
+    def _clear_linear_fit(self):
+        """Clear the linear fit line and results."""
+        if self.fit_line is not None:
+            self.plot_widget.removeItem(self.fit_line)
+            self.fit_line = None
+        self.fit_results_label.setText("No fit performed")
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -547,8 +959,10 @@ class MainWindow(QtWidgets.QMainWindow):
         tabs = QtWidgets.QTabWidget()
         self.output_tab = OutputTab(self.demo_cb)
         self.transfer_tab = TransferTab(self.demo_cb)
+        self.calculation_tab = CalculationTab()
         tabs.addTab(self.output_tab, "Output Mode")
         tabs.addTab(self.transfer_tab, "Transfer Mode")
+        tabs.addTab(self.calculation_tab, "Calculation")
         vlayout.addWidget(tabs, 1)
 
         # Device configurations (model, resource)

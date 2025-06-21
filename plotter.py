@@ -30,10 +30,16 @@ class RealTimePlotter(QtWidgets.QWidget):
         self.mode = mode
 
         self.plot = pg.PlotWidget(title=self._default_title())
-        self.plot.setLabel("left", "Id", units="A")
-        x_label = "Vd" if mode == "output" else "Vg"
+        self.plot.setLabel("left", "Drain Current (Id)", units="A")
+        x_label = "Drain Voltage (Vd)" if mode == "output" else "Gate Voltage (Vg)"
         self.plot.setLabel("bottom", x_label, units="V")
-
+        
+        # Add grid lines for better readability
+        self.plot.showGrid(True, True)
+        
+        # Set background color and styling to match calculation tab
+        self.plot.setBackground('k')  # Dark background
+        
         layout = QtWidgets.QVBoxLayout(self)
         layout.addWidget(self.plot)
 
@@ -63,8 +69,11 @@ class RealTimePlotter(QtWidgets.QWidget):
             # Plot Id vs Vd, separate curve per Vg
             curve = self._output_curves.get(vg)
             if curve is None:
-                pen = pg.mkPen(width=1)
-                curve = self.plot.plot([], [], pen=pen, symbol='o', symbolSize=6, name=f"Vg={vg:.2f} V")
+                # Use different colors for different curves
+                colors = ['b', 'r', 'g', 'c', 'm', 'y', 'k']
+                color_idx = len(self._output_curves) % len(colors)
+                pen = pg.mkPen(color=colors[color_idx], width=2)
+                curve = self.plot.plot([], [], pen=pen, symbol='o', symbolSize=4, name=f"Vg={vg:.2f} V")
                 self._output_curves[vg] = curve
 
             x, y = curve.getData()
@@ -77,7 +86,7 @@ class RealTimePlotter(QtWidgets.QWidget):
             self._transfer_x.append(vg)
             self._transfer_y.append(id_val)
             if self._transfer_curve is None:
-                pen = pg.mkPen(color="r", width=2)
-                self._transfer_curve = self.plot.plot(self._transfer_x, self._transfer_y, pen=pen)
+                pen = pg.mkPen(color="b", width=2)
+                self._transfer_curve = self.plot.plot(self._transfer_x, self._transfer_y, pen=pen, symbol='o', symbolSize=4)
             else:
                 self._transfer_curve.setData(self._transfer_x, self._transfer_y) 
