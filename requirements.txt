@@ -1,0 +1,13 @@
+numpy==2.3.0
+pandas==2.3.0
+PyQt5==5.15.11
+PyQt5-Qt5==5.15.17
+PyQt5_sip==12.17.0
+pyqtgraph==0.13.7
+python-dateutil==2.9.0.post0
+pytz==2025.2
+PyVISA==1.15.0
+PyVISA-py==0.8.0
+six==1.17.0
+typing_extensions==4.14.0
+tzdata==2025.2

@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+
+# Mac
+.DS_Store
+
+# Logs
+*.log
+
+# Build artifacts
+*.egg-info/
+*.egg
+build/
+dist/ 
