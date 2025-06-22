@@ -13,6 +13,8 @@ from PyQt5 import QtWidgets, QtCore, QtGui
 import pyqtgraph as pg
 import numpy as np
 from scipy import stats
+import sympy as sp
+from pint import UnitRegistry
 
 from keithley2401_controller import Keithley2401
 from keithley2635a_controller import Keithley2635A
@@ -104,6 +106,154 @@ class DeviceDialog(QtWidgets.QDialog):
             "2401": self.k2401_res_cb.currentText(),
             "2635A": self.k2635_res_cb.currentText(),
         }
+
+
+class MobilityCalculationDialog(QtWidgets.QDialog):
+    """Dialog for calculating FET mobility using transconductance and device parameters."""
+    
+    def __init__(self, gm_value: float = None, parent: Optional[QtWidgets.QWidget] = None):
+        super().__init__(parent)
+        self.setWindowTitle("FET Mobility Calculation")
+        self.setModal(True)
+        self.resize(500, 600)
+        
+        # Initialize unit registry
+        self.ureg = UnitRegistry()
+        self.Q_ = self.ureg.Quantity
+        
+        layout = QtWidgets.QVBoxLayout(self)
+        
+        # Info label
+        info_label = QtWidgets.QLabel(
+            "Calculate FET mobility using transconductance from linear fit.\n"
+            "Formula: μ = (gm / (Cox × V_DS)) × (L / W)"
+        )
+        info_label.setWordWrap(True)
+        layout.addWidget(info_label)
+        
+        # Parameters form
+        form_layout = QtWidgets.QFormLayout()
+        
+        # Transconductance (from fit)
+        self.gm_sb = QtWidgets.QDoubleSpinBox()
+        self.gm_sb.setDecimals(6)
+        self.gm_sb.setRange(-1e6, 1e6)
+        self.gm_sb.setSuffix(" S")
+        if gm_value is not None:
+            self.gm_sb.setValue(gm_value)
+        
+        # Drain-source voltage
+        self.vds_sb = QtWidgets.QDoubleSpinBox()
+        self.vds_sb.setDecimals(3)
+        self.vds_sb.setRange(0.001, 1000)
+        self.vds_sb.setValue(0.1)
+        self.vds_sb.setSuffix(" V")
+        
+        # Channel length
+        self.length_sb = QtWidgets.QDoubleSpinBox()
+        self.length_sb.setDecimals(1)
+        self.length_sb.setRange(0.1, 10000)
+        self.length_sb.setValue(5.0)
+        self.length_sb.setSuffix(" μm")
+        
+        # Channel width
+        self.width_sb = QtWidgets.QDoubleSpinBox()
+        self.width_sb.setDecimals(1)
+        self.width_sb.setRange(0.1, 10000)
+        self.width_sb.setValue(20.0)
+        self.width_sb.setSuffix(" μm")
+        
+        # Oxide thickness
+        self.tox_sb = QtWidgets.QDoubleSpinBox()
+        self.tox_sb.setDecimals(1)
+        self.tox_sb.setRange(1.0, 10000)
+        self.tox_sb.setValue(300.0)
+        self.tox_sb.setSuffix(" nm")
+        
+        # Relative permittivity
+        self.eps_r_sb = QtWidgets.QDoubleSpinBox()
+        self.eps_r_sb.setDecimals(2)
+        self.eps_r_sb.setRange(1.0, 100.0)
+        self.eps_r_sb.setValue(3.9)  # SiO2
+        
+        form_layout.addRow("Transconductance (gm):", self.gm_sb)
+        form_layout.addRow("Drain-Source Voltage (V_DS):", self.vds_sb)
+        form_layout.addRow("Channel Length (L):", self.length_sb)
+        form_layout.addRow("Channel Width (W):", self.width_sb)
+        form_layout.addRow("Oxide Thickness (t_ox):", self.tox_sb)
+        form_layout.addRow("Relative Permittivity (ε_r):", self.eps_r_sb)
+        
+        layout.addLayout(form_layout)
+        
+        # Calculate button
+        calc_btn = QtWidgets.QPushButton("Calculate Mobility")
+        calc_btn.clicked.connect(self._calculate_mobility)
+        layout.addWidget(calc_btn)
+        
+        # Results display
+        self.results_text = QtWidgets.QTextEdit()
+        self.results_text.setReadOnly(True)
+        self.results_text.setMaximumHeight(200)
+        layout.addWidget(self.results_text)
+        
+        # Close button
+        close_btn = QtWidgets.QPushButton("Close")
+        close_btn.clicked.connect(self.accept)
+        layout.addWidget(close_btn)
+    
+    def _calculate_mobility(self):
+        """Calculate mobility using the provided parameters."""
+        try:
+            # Get parameters with units
+            gm = self.Q_(self.gm_sb.value(), 'A / V')
+            V_DS = self.Q_(self.vds_sb.value(), 'V')
+            L = self.Q_(self.length_sb.value(), 'micrometer')
+            W = self.Q_(self.width_sb.value(), 'micrometer')
+            t_ox = self.Q_(self.tox_sb.value(), 'nanometer')
+            eps_r = self.eps_r_sb.value()
+            
+            # Calculate mobility
+            mobility = self._calculate_mobility_core(gm, V_DS, L, W, eps_r, t_ox)
+            
+            # Display results
+            results = self._format_results(gm, V_DS, L, W, t_ox, eps_r, mobility)
+            self.results_text.setPlainText(results)
+            
+        except Exception as e:
+            QtWidgets.QMessageBox.critical(self, "Calculation Error", f"Failed to calculate mobility:\n{str(e)}")
+    
+    def _calculate_mobility_core(self, gm, V_DS, L, W, eps_r, t_ox):
+        """Core mobility calculation function."""
+        # Constants
+        eps_0 = self.Q_(8.854e-12, 'F / m')
+        
+        # Calculate Cox: Cox = eps_0 * eps_r / t_ox
+        Cox = (eps_0 * eps_r) / t_ox
+        Cox = Cox.to('F / meter ** 2')
+        
+        # Calculate mobility: μ = (gm / (Cox * V_DS)) * (L / W)
+        mu_FE = (gm / (Cox * V_DS)) * (L / W)
+        mu_FE = mu_FE.to('centimeter ** 2 / volt / second')
+        
+        return mu_FE, Cox
+    
+    def _format_results(self, gm, V_DS, L, W, t_ox, eps_r, mobility_data):
+        """Format calculation results for display."""
+        mu_FE, Cox = mobility_data
+        
+        results = f"""
+Mobility Calculation Results
+
+gₘ = {gm:.3e}
+V_DS = {V_DS}
+L = {L}
+W = {W}
+
+Result: μ_FE = {mu_FE:.1f}
+
+Formula: μ = (gₘ/Cₒₓ⋅V_DS) × (L/W)
+"""
+        return results.strip()
 
 
 # --------------------------------------------------------------
@@ -605,6 +755,12 @@ class CalculationTab(QtWidgets.QWidget):
         self.clear_fit_btn.clicked.connect(self._clear_linear_fit)
         self.clear_fit_btn.setEnabled(False)
         
+        # Mobility calculation button
+        self.mobility_btn = QtWidgets.QPushButton("Calculate Mobility")
+        self.mobility_btn.clicked.connect(self._open_mobility_dialog)
+        self.mobility_btn.setEnabled(False)
+        linear_layout.addWidget(self.mobility_btn)
+        
         btn_layout.addWidget(self.fit_btn)
         btn_layout.addWidget(self.clear_fit_btn)
         linear_layout.addLayout(btn_layout)
@@ -828,6 +984,7 @@ class CalculationTab(QtWidgets.QWidget):
                     
             self.fit_btn.setEnabled(True)
             self.clear_fit_btn.setEnabled(True)
+            self.mobility_btn.setEnabled(True)
         else:
             # Remove linear region selector
             if self.linear_region is not None:
@@ -835,6 +992,7 @@ class CalculationTab(QtWidgets.QWidget):
                 self.linear_region = None
             self.fit_btn.setEnabled(False)
             self.clear_fit_btn.setEnabled(False)
+            self.mobility_btn.setEnabled(False)
             self._clear_linear_fit()
     
     def _fit_linear_region(self):
@@ -904,6 +1062,9 @@ class CalculationTab(QtWidgets.QWidget):
             )
             self.fit_results_label.setText(results_text)
             
+            # Enable mobility calculation button
+            self.mobility_btn.setEnabled(True)
+            
         except Exception as e:
             QtWidgets.QMessageBox.critical(self, "Error Fitting", f"Failed to fit linear region:\n{str(e)}")
     
@@ -913,6 +1074,34 @@ class CalculationTab(QtWidgets.QWidget):
             self.plot_widget.removeItem(self.fit_line)
             self.fit_line = None
         self.fit_results_label.setText("No fit performed")
+        self.mobility_btn.setEnabled(False)
+
+    def _open_mobility_dialog(self):
+        """Open the mobility calculation dialog when linear fit results are available."""
+        results_text = self.fit_results_label.text()
+        if results_text != "No fit performed":
+            try:
+                # Extract transconductance value from fit results
+                lines = results_text.split('\n')
+                gm_line = [line for line in lines if 'Transconductance:' in line][0]
+                gm_str = gm_line.split('Transconductance: ')[1].split(' S')[0]
+                gm_value = float(gm_str)
+                
+                # Open mobility calculation dialog
+                dlg = MobilityCalculationDialog(gm_value, self)
+                dlg.exec_()
+                
+            except (IndexError, ValueError) as e:
+                QtWidgets.QMessageBox.warning(self, "Error", f"Could not extract transconductance value: {str(e)}")
+        else:
+            QtWidgets.QMessageBox.warning(self, "No Fit Data", "Please perform a linear fit first.")
+    
+    def _open_mobility_calculation_dialog(self, gm_value: float):
+        """Open the mobility calculation dialog with the given transconductance."""
+        dlg = MobilityCalculationDialog(gm_value)
+        if dlg.exec_() == QtWidgets.QDialog.Accepted:
+            # Handle the result of the mobility calculation dialog
+            pass
 
 
 class MainWindow(QtWidgets.QMainWindow):

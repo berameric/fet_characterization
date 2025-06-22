@@ -15,6 +15,7 @@ This application provides a modern PyQt5 GUI for real-time characterization of f
 * **Calculation Tab**: Load and visualize any CSV measurement data
 * **Interactive Linear Region Selection**: Drag-and-drop region selection for linear fitting
 * **FET Parameter Extraction**: Automatic calculation of threshold voltage and transconductance
+* **Mobility Calculation**: Extract carrier mobility from linear region analysis with device geometry
 * **Flexible Column Selection**: Choose any CSV columns for X/Y plotting
 * **Multi-curve Visualization**: Group data by parameters for family curves
 
@@ -78,6 +79,11 @@ python main.py
    - Drag region boundaries to select linear portion
    - Click "Fit Linear" for automatic parameter extraction
    - View threshold voltage, transconductance, and fit statistics
+5. **Mobility Calculation**:
+   - Input device geometry (channel width, length, oxide thickness)
+   - Automatic mobility extraction from transconductance
+   - Support for both field-effect and Hall mobility calculations
+   - Real-time mobility display with proper units (cm²/V·s)
 
 ## Key Features in Detail
 
@@ -85,6 +91,7 @@ python main.py
 - **Interactive Selection**: Drag-and-drop region boundaries on plots
 - **Statistical Analysis**: R-squared, correlation, p-value, standard error
 - **FET Parameters**: Automatic calculation of Vth and gm
+- **Mobility Extraction**: Calculate carrier mobility using device geometry parameters
 - **Visual Feedback**: Red dashed line showing linear fit
 - **Comprehensive Results**: Detailed parameter display with proper units
 
@@ -123,6 +130,8 @@ fet_characterization/
 - **NumPy**: Numerical computations
 - **Pandas**: Data manipulation and CSV handling
 - **SciPy**: Statistical analysis and linear fitting
+- **Pint**: Unit conversion and physical quantity handling
+- **SymPy**: Symbolic mathematics for mobility calculations
 
 ## Tips for Best Results
 
@@ -136,6 +145,8 @@ fet_characterization/
 - Ensure sufficient data points in the selected region
 - Check R-squared values to validate fit quality
 - Use transconductance values to compare device performance
+- Input accurate device geometry for reliable mobility calculations
+- Consider oxide capacitance and dielectric constant for your specific device
 
 ### **Data Organization**
 - Use descriptive output directory names
@@ -148,6 +159,7 @@ fet_characterization/
 - **Demo Mode**: Use for testing interface without hardware
 - **CSV Loading**: Check file format and column names
 - **Linear Fitting**: Ensure selected region contains sufficient data points
+- **Mobility Calculation**: Verify device geometry parameters are in correct units (μm for dimensions, nm for oxide thickness)
 
 ## License
 MIT 
