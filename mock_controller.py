@@ -27,8 +27,13 @@ class MockSMU:
         # Add some noise
         return current + 1e-5 * (random.random() - 0.5)
 
-    def close(self):
+    def close(self) -> None:
         pass
 
     def set_nplc(self, nplc: float):
-        pass 
+        """Set integration time in power line cycles."""
+        pass  # no-op in demo mode
+
+    def set_compliance(self, compliance: float) -> None:
+        """Set current compliance limit (in Amperes)."""
+        pass  # no-op in demo mode 

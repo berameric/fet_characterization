@@ -51,7 +51,15 @@ class Keithley2635A:
         self.write("smua.source.output = smua.OUTPUT_ON")
 
     def output_off(self) -> None:
+        if self.demo:
+            return
         self.write("smua.source.output = smua.OUTPUT_OFF")
+
+    def set_compliance(self, compliance: float) -> None:
+        """Set current compliance limit (in Amperes)."""
+        if self.demo:
+            return
+        self.write(f"smua.source.limiti = {compliance}")
 
     # ------------------------------------------------------------------
     def set_voltage(self, voltage: float) -> None:

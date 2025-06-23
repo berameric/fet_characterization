@@ -21,6 +21,8 @@ from keithley2635a_controller import Keithley2635A
 from mock_controller import MockSMU
 from measurement_worker import MeasurementWorker, SweepParameters
 from plotter import RealTimePlotter
+from version import __version__, get_version_info
+from sweep_settings import AdvancedSweepSettings, SweepProfile, SweepValidator
 
 
 # --------------------------------------------------------------
@@ -106,6 +108,266 @@ class DeviceDialog(QtWidgets.QDialog):
             "2401": self.k2401_res_cb.currentText(),
             "2635A": self.k2635_res_cb.currentText(),
         }
+
+
+class AdvancedSweepDialog(QtWidgets.QDialog):
+    """Dialog for advanced sweep settings configuration."""
+    
+    def __init__(self, current_settings: AdvancedSweepSettings = None, parent: Optional[QtWidgets.QWidget] = None):
+        super().__init__(parent)
+        self.setWindowTitle("Advanced Sweep Settings")
+        self.setModal(True)
+        self.resize(600, 700)
+        
+        self.settings = current_settings or AdvancedSweepSettings()
+        
+        layout = QtWidgets.QVBoxLayout(self)
+        
+        # Profile selection
+        profile_group = QtWidgets.QGroupBox("Preset Profiles")
+        profile_layout = QtWidgets.QHBoxLayout(profile_group)
+        
+        self.profile_combo = QtWidgets.QComboBox()
+        profiles = SweepProfile.get_preset_profiles()
+        for key, profile in profiles.items():
+            self.profile_combo.addItem(f"{profile.name} - {profile.description}", key)
+        
+        load_profile_btn = QtWidgets.QPushButton("Load Profile")
+        load_profile_btn.clicked.connect(self._load_profile)
+        
+        profile_layout.addWidget(QtWidgets.QLabel("Profile:"))
+        profile_layout.addWidget(self.profile_combo)
+        profile_layout.addWidget(load_profile_btn)
+        layout.addWidget(profile_group)
+        
+        # Create tabs for different setting categories
+        tabs = QtWidgets.QTabWidget()
+        
+        # Timing settings tab
+        timing_tab = self._create_timing_tab()
+        tabs.addTab(timing_tab, "Timing")
+        
+        # Compliance settings tab
+        compliance_tab = self._create_compliance_tab()
+        tabs.addTab(compliance_tab, "Compliance")
+        
+        # Measurement settings tab
+        measurement_tab = self._create_measurement_tab()
+        tabs.addTab(measurement_tab, "Measurement")
+        
+        # Advanced settings tab
+        advanced_tab = self._create_advanced_tab()
+        tabs.addTab(advanced_tab, "Advanced")
+        
+        layout.addWidget(tabs)
+        
+        # Validation and time estimate
+        self.validation_label = QtWidgets.QLabel()
+        self.validation_label.setWordWrap(True)
+        layout.addWidget(self.validation_label)
+        
+        # Buttons
+        button_layout = QtWidgets.QHBoxLayout()
+        
+        validate_btn = QtWidgets.QPushButton("Validate Settings")
+        validate_btn.clicked.connect(self._validate_settings)
+        
+        reset_btn = QtWidgets.QPushButton("Reset to Defaults")
+        reset_btn.clicked.connect(self._reset_to_defaults)
+        
+        button_box = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.Ok | QtWidgets.QDialogButtonBox.Cancel
+        )
+        button_box.accepted.connect(self.accept)
+        button_box.rejected.connect(self.reject)
+        
+        button_layout.addWidget(validate_btn)
+        button_layout.addWidget(reset_btn)
+        button_layout.addStretch()
+        button_layout.addWidget(button_box)
+        
+        layout.addLayout(button_layout)
+        
+        # Load current settings into UI
+        self._load_settings_to_ui()
+        
+    def _create_timing_tab(self) -> QtWidgets.QWidget:
+        """Create timing settings tab."""
+        widget = QtWidgets.QWidget()
+        layout = QtWidgets.QFormLayout(widget)
+        
+        self.stabilization_sb = QtWidgets.QDoubleSpinBox()
+        self.stabilization_sb.setRange(0.0, 10.0)
+        self.stabilization_sb.setDecimals(3)
+        self.stabilization_sb.setSuffix(" s")
+        
+        self.point_dwell_sb = QtWidgets.QDoubleSpinBox()
+        self.point_dwell_sb.setRange(0.0, 5.0)
+        self.point_dwell_sb.setDecimals(3)
+        self.point_dwell_sb.setSuffix(" s")
+        
+        self.measurement_delay_sb = QtWidgets.QDoubleSpinBox()
+        self.measurement_delay_sb.setRange(0.0, 1.0)
+        self.measurement_delay_sb.setDecimals(3)
+        self.measurement_delay_sb.setSuffix(" s")
+        
+        self.inter_sweep_delay_sb = QtWidgets.QDoubleSpinBox()
+        self.inter_sweep_delay_sb.setRange(0.0, 10.0)
+        self.inter_sweep_delay_sb.setDecimals(3)
+        self.inter_sweep_delay_sb.setSuffix(" s")
+        
+        layout.addRow("Stabilization Time:", self.stabilization_sb)
+        layout.addRow("Point Dwell Time:", self.point_dwell_sb)
+        layout.addRow("Measurement Delay:", self.measurement_delay_sb)
+        layout.addRow("Inter-sweep Delay:", self.inter_sweep_delay_sb)
+        
+        return widget
+    
+    def _create_compliance_tab(self) -> QtWidgets.QWidget:
+        """Create compliance settings tab."""
+        widget = QtWidgets.QWidget()
+        layout = QtWidgets.QFormLayout(widget)
+        
+        self.drain_compliance_sb = QtWidgets.QDoubleSpinBox()
+        self.drain_compliance_sb.setRange(1e-9, 1.0)
+        self.drain_compliance_sb.setDecimals(6)
+        self.drain_compliance_sb.setSuffix(" A")
+        
+        self.gate_compliance_sb = QtWidgets.QDoubleSpinBox()
+        self.gate_compliance_sb.setRange(1e-12, 1e-3)
+        self.gate_compliance_sb.setDecimals(9)
+        self.gate_compliance_sb.setSuffix(" A")
+        
+        self.compliance_mode_combo = QtWidgets.QComboBox()
+        self.compliance_mode_combo.addItems(["Continue", "Abort", "Skip"])
+        
+        layout.addRow("Drain Compliance:", self.drain_compliance_sb)
+        layout.addRow("Gate Compliance:", self.gate_compliance_sb)
+        layout.addRow("Compliance Mode:", self.compliance_mode_combo)
+        
+        return widget
+    
+    def _create_measurement_tab(self) -> QtWidgets.QWidget:
+        """Create measurement settings tab."""
+        widget = QtWidgets.QWidget()
+        layout = QtWidgets.QFormLayout(widget)
+        
+        self.averages_sb = QtWidgets.QSpinBox()
+        self.averages_sb.setRange(1, 100)
+        
+        self.discard_first_cb = QtWidgets.QCheckBox()
+        
+        self.filter_enabled_cb = QtWidgets.QCheckBox()
+        
+        self.filter_count_sb = QtWidgets.QSpinBox()
+        self.filter_count_sb.setRange(1, 100)
+        
+        layout.addRow("Measurement Averages:", self.averages_sb)
+        layout.addRow("Discard First Reading:", self.discard_first_cb)
+        layout.addRow("Digital Filter Enabled:", self.filter_enabled_cb)
+        layout.addRow("Filter Count:", self.filter_count_sb)
+        
+        return widget
+    
+    def _create_advanced_tab(self) -> QtWidgets.QWidget:
+        """Create advanced settings tab."""
+        widget = QtWidgets.QWidget()
+        layout = QtWidgets.QFormLayout(widget)
+        
+        self.auto_zero_cb = QtWidgets.QCheckBox()
+        self.use_4_wire_cb = QtWidgets.QCheckBox()
+        
+        self.max_voltage_sb = QtWidgets.QDoubleSpinBox()
+        self.max_voltage_sb.setRange(0.1, 200.0)
+        self.max_voltage_sb.setSuffix(" V")
+        
+        self.max_current_sb = QtWidgets.QDoubleSpinBox()
+        self.max_current_sb.setRange(1e-6, 10.0)
+        self.max_current_sb.setDecimals(6)
+        self.max_current_sb.setSuffix(" A")
+        
+        layout.addRow("Auto Zero:", self.auto_zero_cb)
+        layout.addRow("4-Wire Measurement:", self.use_4_wire_cb)
+        layout.addRow("Max Voltage:", self.max_voltage_sb)
+        layout.addRow("Max Current:", self.max_current_sb)
+        
+        return widget
+    
+    def _load_profile(self):
+        """Load selected profile settings."""
+        profile_key = self.profile_combo.currentData()
+        if profile_key:
+            profiles = SweepProfile.get_preset_profiles()
+            if profile_key in profiles:
+                self.settings = profiles[profile_key].settings
+                self._load_settings_to_ui()
+    
+    def _load_settings_to_ui(self):
+        """Load current settings into UI controls."""
+        self.stabilization_sb.setValue(self.settings.stabilization_time)
+        self.point_dwell_sb.setValue(self.settings.point_dwell_time)
+        self.measurement_delay_sb.setValue(self.settings.measurement_delay)
+        self.inter_sweep_delay_sb.setValue(self.settings.inter_sweep_delay)
+        
+        self.drain_compliance_sb.setValue(self.settings.drain_compliance)
+        self.gate_compliance_sb.setValue(self.settings.gate_compliance)
+        
+        self.averages_sb.setValue(self.settings.measurement_averages)
+        self.discard_first_cb.setChecked(self.settings.discard_first)
+        self.filter_enabled_cb.setChecked(self.settings.filter_enabled)
+        self.filter_count_sb.setValue(self.settings.filter_count)
+        
+        self.auto_zero_cb.setChecked(self.settings.auto_zero)
+        self.use_4_wire_cb.setChecked(self.settings.use_4_wire)
+        self.max_voltage_sb.setValue(self.settings.max_voltage)
+        self.max_current_sb.setValue(self.settings.max_current)
+    
+    def _validate_settings(self):
+        """Validate current settings and show results."""
+        # Update settings from UI
+        self._update_settings_from_ui()
+        
+        # Validate
+        warnings = self.settings.validate()
+        
+        if not warnings:
+            self.validation_label.setText("✅ All settings are valid")
+            self.validation_label.setStyleSheet("color: green;")
+        else:
+            warning_text = "⚠️ Warnings:\n" + "\n".join(f"• {w}" for w in warnings)
+            self.validation_label.setText(warning_text)
+            self.validation_label.setStyleSheet("color: orange;")
+    
+    def _reset_to_defaults(self):
+        """Reset all settings to defaults."""
+        self.settings = AdvancedSweepSettings()
+        self._load_settings_to_ui()
+        self.validation_label.setText("")
+    
+    def _update_settings_from_ui(self):
+        """Update settings object from UI controls."""
+        self.settings.stabilization_time = self.stabilization_sb.value()
+        self.settings.point_dwell_time = self.point_dwell_sb.value()
+        self.settings.measurement_delay = self.measurement_delay_sb.value()
+        self.settings.inter_sweep_delay = self.inter_sweep_delay_sb.value()
+        
+        self.settings.drain_compliance = self.drain_compliance_sb.value()
+        self.settings.gate_compliance = self.gate_compliance_sb.value()
+        
+        self.settings.measurement_averages = self.averages_sb.value()
+        self.settings.discard_first = self.discard_first_cb.isChecked()
+        self.settings.filter_enabled = self.filter_enabled_cb.isChecked()
+        self.settings.filter_count = self.filter_count_sb.value()
+        
+        self.settings.auto_zero = self.auto_zero_cb.isChecked()
+        self.settings.use_4_wire = self.use_4_wire_cb.isChecked()
+        self.settings.max_voltage = self.max_voltage_sb.value()
+        self.settings.max_current = self.max_current_sb.value()
+    
+    def get_settings(self) -> AdvancedSweepSettings:
+        """Get the configured settings."""
+        self._update_settings_from_ui()
+        return self.settings
 
 
 class MobilityCalculationDialog(QtWidgets.QDialog):
@@ -289,6 +551,8 @@ class BaseTab(QtWidgets.QWidget):
         # LEFT: control panel
         # ------------------------------------------------------------------
         self.control_panel = QtWidgets.QWidget()
+        # Set fixed width to prevent expansion
+        self.control_panel.setFixedWidth(320)
         control_vlayout = QtWidgets.QVBoxLayout(self.control_panel)
         # Add some breathing room
         control_vlayout.setContentsMargins(8, 8, 8, 8)
@@ -311,6 +575,39 @@ class BaseTab(QtWidgets.QWidget):
         control_vlayout.addWidget(self.params_group)
 
         # ------------------------------------------------------------------
+        # Advanced Settings group
+        # ------------------------------------------------------------------
+        self.advanced_group = QtWidgets.QGroupBox("Advanced Settings")
+        self.advanced_group.setStyleSheet(
+            "QGroupBox { font-weight: bold; border: 1px solid gray; border-radius: 4px; margin-top: 6px; }"
+            "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 3px 0 3px; }"
+        )
+        advanced_layout = QtWidgets.QVBoxLayout()
+        
+        self.advanced_settings_btn = QtWidgets.QPushButton("Sweep Settings...")
+        self.advanced_settings_btn.clicked.connect(self._open_advanced_settings)
+        advanced_layout.addWidget(self.advanced_settings_btn)
+        
+        # Time estimate label
+        self.time_estimate_label = QtWidgets.QLabel("Estimated time: --")
+        self.time_estimate_label.setWordWrap(True)
+        self.time_estimate_label.setFixedHeight(30)
+        self.time_estimate_label.setStyleSheet(
+            "QLabel { "
+            "color: gray; "
+            "font-size: 10pt; "
+            "background-color: #f9f9f9; "
+            "border: 1px solid #e0e0e0; "
+            "border-radius: 3px; "
+            "padding: 3px; "
+            "}"
+        )
+        advanced_layout.addWidget(self.time_estimate_label)
+        
+        self.advanced_group.setLayout(advanced_layout)
+        control_vlayout.addWidget(self.advanced_group)
+
+        # ------------------------------------------------------------------
         # Run control group box (start/stop, progress)
         # ------------------------------------------------------------------
         self.run_group = QtWidgets.QGroupBox("Run Control")
@@ -318,15 +615,35 @@ class BaseTab(QtWidgets.QWidget):
             "QGroupBox { font-weight: bold; border: 1px solid gray; border-radius: 4px; margin-top: 6px; }"
             "QGroupBox::title { subcontrol-origin: margin; left: 8px; padding: 0 3px 0 3px; }"
         )
+        run_vlayout = QtWidgets.QVBoxLayout()
+        
+        # Buttons in horizontal layout
         btn_layout = QtWidgets.QHBoxLayout()
         self.start_btn = QtWidgets.QPushButton("Start")
         self.stop_btn = QtWidgets.QPushButton("Stop")
         self.stop_btn.setEnabled(False)
         btn_layout.addWidget(self.start_btn)
         btn_layout.addWidget(self.stop_btn)
+        run_vlayout.addLayout(btn_layout)
+        
+        # Progress label on separate line with fixed height and word wrap
         self.progress_lbl = QtWidgets.QLabel("Idle")
-        btn_layout.addWidget(self.progress_lbl)
-        self.run_group.setLayout(btn_layout)
+        self.progress_lbl.setWordWrap(True)
+        self.progress_lbl.setFixedHeight(40)  # Fixed height to prevent expansion
+        self.progress_lbl.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
+        self.progress_lbl.setStyleSheet(
+            "QLabel { "
+            "background-color: #f5f5f5; "
+            "border: 1px solid #ddd; "
+            "border-radius: 3px; "
+            "padding: 4px; "
+            "font-size: 9pt; "
+            "color: #333; "
+            "}"
+        )
+        run_vlayout.addWidget(self.progress_lbl)
+        
+        self.run_group.setLayout(run_vlayout)
         control_vlayout.addWidget(self.run_group)
 
         # Push everything up and leave space at the bottom
@@ -340,6 +657,9 @@ class BaseTab(QtWidgets.QWidget):
 
         # Worker reference
         self.worker: Optional[MeasurementWorker] = None
+
+        # Advanced settings
+        self.advanced_settings = AdvancedSweepSettings()
 
         # Connect generic slots
         self.start_btn.clicked.connect(self._on_start_clicked)
@@ -387,6 +707,24 @@ class BaseTab(QtWidgets.QWidget):
     def _on_worker_error(self, msg: str):
         QtWidgets.QMessageBox.critical(self, "Measurement Error", msg)
 
+    def _open_advanced_settings(self):
+        """Open the advanced sweep settings dialog."""
+        dialog = AdvancedSweepDialog(self.advanced_settings, self)
+        if dialog.exec_() == QtWidgets.QDialog.Accepted:
+            self.advanced_settings = dialog.get_settings()
+            self._update_time_estimate()
+
+    def _update_time_estimate(self):
+        """Update the measurement time estimate based on current parameters."""
+        try:
+            self._calculate_time_estimate()
+        except Exception:
+            self.time_estimate_label.setText("Estimated time: --")
+
+    def _calculate_time_estimate(self):
+        """Calculate time estimate - to be overridden by subclasses."""
+        self.time_estimate_label.setText("Estimated time: --")
+
     # ------------------------------------------------------------------
     # Abstract methods to be implemented by subclasses
     # ------------------------------------------------------------------
@@ -418,12 +756,23 @@ class OutputTab(BaseTab):
         self.vg_step_sb = _mk_dspin(0.5, 0.001, 40.0, 0.05)
 
         self.stab_time_sb = _mk_dspin(0.2, 0.0, 10.0, 0.1)
-        self.repeats_sb = QtWidgets.QSpinBox()
-        self.repeats_sb.setRange(1, 100)
-        self.repeats_sb.setValue(1)
 
         # dwell per point
         self.dwell_sb = _mk_dspin(0.05, 0.0, 5.0, 0.01)
+
+        # Drain compliance current
+        self.drain_compliance_sb = QtWidgets.QDoubleSpinBox()
+        self.drain_compliance_sb.setRange(1e-6, 1.0)  # 1µA to 1A
+        self.drain_compliance_sb.setDecimals(6)
+        self.drain_compliance_sb.setValue(0.1)  # Default 100mA
+        self.drain_compliance_sb.setSuffix(" A")
+        
+        # Gate compliance current  
+        self.gate_compliance_sb = QtWidgets.QDoubleSpinBox()
+        self.gate_compliance_sb.setRange(1e-9, 1e-3)  # 1nA to 1mA
+        self.gate_compliance_sb.setDecimals(9)
+        self.gate_compliance_sb.setValue(1e-6)  # Default 1µA
+        self.gate_compliance_sb.setSuffix(" A")
 
         self.form_layout.addRow(QtWidgets.QLabel("Drain Vd start [V]"), self.vd_start_sb)
         self.form_layout.addRow(QtWidgets.QLabel("Drain Vd stop [V]"), self.vd_stop_sb)
@@ -434,8 +783,9 @@ class OutputTab(BaseTab):
         self.form_layout.addRow(QtWidgets.QLabel("Gate Vg stop [V]"), self.vg_stop_sb)
         self.form_layout.addRow(QtWidgets.QLabel("Gate Vg step [V]"), self.vg_step_sb)
         self.form_layout.addRow(QtWidgets.QLabel("Stabilization [s]"), self.stab_time_sb)
-        self.form_layout.addRow(QtWidgets.QLabel("Repeats"), self.repeats_sb)
         self.form_layout.addRow(QtWidgets.QLabel("Point dwell [s]"), self.dwell_sb)
+        self.form_layout.addRow(QtWidgets.QLabel("Drain compliance [A]"), self.drain_compliance_sb)
+        self.form_layout.addRow(QtWidgets.QLabel("Gate compliance [A]"), self.gate_compliance_sb)
 
         # --- Plotter ---
         self.plotter = RealTimePlotter(mode="output")
@@ -473,13 +823,14 @@ class OutputTab(BaseTab):
             vg_stop=vg_stop,
             vg_step=vg_step,
             stabilization_s=self.stab_time_sb.value(),
-            repeats=self.repeats_sb.value(),
             separate_files=self.multi_cb.isChecked(),
             outer_label="Vg",
             outer_first_gate=True,
             csv_path=outfile,
             dwell_s=self.dwell_sb.value(),
             nplc=self.window().get_nplc(),
+            drain_compliance=self.drain_compliance_sb.value(),
+            gate_compliance=self.gate_compliance_sb.value(),
         )
 
         # always clear old measurement graph
@@ -517,9 +868,9 @@ class OutputTab(BaseTab):
         self._current_set += 1
         self.plotter.clear()    
         if math.isnan(vg):
-            txt = f"Set {self._current_set}/{self._total_sets}  |  Vd={vd:.2f} V"
+            txt = f"Set {self._current_set}/{self._total_sets}\nVd={vd:.2f}V"
         else:
-            txt = f"Set {self._current_set}/{self._total_sets}  |  Vg={vg:.2f} V"
+            txt = f"Set {self._current_set}/{self._total_sets}\nVg={vg:.2f}V"
         self.progress_lbl.setText(txt)
 
     def _on_point_progress(self, txt: str):
@@ -549,12 +900,23 @@ class TransferTab(BaseTab):
         self.vg_step_sb = _mk_dspin(0.1, 0.001, 40.0, 0.05)
 
         self.stab_time_sb = _mk_dspin(0.2, 0.0, 10.0, 0.1)
-        self.repeats_sb = QtWidgets.QSpinBox()
-        self.repeats_sb.setRange(1, 100)
-        self.repeats_sb.setValue(1)
 
         # dwell per point
         self.dwell_sb = _mk_dspin(0.05, 0.0, 5.0, 0.01)
+
+        # Drain compliance current
+        self.drain_compliance_sb = QtWidgets.QDoubleSpinBox()
+        self.drain_compliance_sb.setRange(1e-6, 1.0)  # 1µA to 1A
+        self.drain_compliance_sb.setDecimals(6)
+        self.drain_compliance_sb.setValue(0.1)  # Default 100mA
+        self.drain_compliance_sb.setSuffix(" A")
+        
+        # Gate compliance current  
+        self.gate_compliance_sb = QtWidgets.QDoubleSpinBox()
+        self.gate_compliance_sb.setRange(1e-9, 1e-3)  # 1nA to 1mA
+        self.gate_compliance_sb.setDecimals(9)
+        self.gate_compliance_sb.setValue(1e-6)  # Default 1µA
+        self.gate_compliance_sb.setSuffix(" A")
 
         self.form_layout.addRow(self.multi_cb)
         self.form_layout.addRow(QtWidgets.QLabel("Drain Vd fixed [V]"), self.vd_fixed_sb)
@@ -565,8 +927,9 @@ class TransferTab(BaseTab):
         self.form_layout.addRow(QtWidgets.QLabel("Gate Vg stop [V]"), self.vg_stop_sb)
         self.form_layout.addRow(QtWidgets.QLabel("Gate Vg step [V]"), self.vg_step_sb)
         self.form_layout.addRow(QtWidgets.QLabel("Stabilization [s]"), self.stab_time_sb)
-        self.form_layout.addRow(QtWidgets.QLabel("Repeats"), self.repeats_sb)
         self.form_layout.addRow(QtWidgets.QLabel("Point dwell [s]"), self.dwell_sb)
+        self.form_layout.addRow(QtWidgets.QLabel("Drain compliance [A]"), self.drain_compliance_sb)
+        self.form_layout.addRow(QtWidgets.QLabel("Gate compliance [A]"), self.gate_compliance_sb)
 
         # --- Plotter ---
         self.plotter = RealTimePlotter(mode="transfer")
@@ -602,13 +965,14 @@ class TransferTab(BaseTab):
             vg_stop=self.vg_stop_sb.value(),
             vg_step=self.vg_step_sb.value(),
             stabilization_s=self.stab_time_sb.value(),
-            repeats=self.repeats_sb.value(),
             separate_files=self.multi_cb.isChecked(),
             outer_label="Vd" if self.multi_cb.isChecked() else "Vg",
             outer_first_gate=not self.multi_cb.isChecked(),
             csv_path=outfile,
             dwell_s=self.dwell_sb.value(),
             nplc=self.window().get_nplc(),
+            drain_compliance=self.drain_compliance_sb.value(),
+            gate_compliance=self.gate_compliance_sb.value(),
         )
 
         # always clear old measurement graph
@@ -646,14 +1010,35 @@ class TransferTab(BaseTab):
         self._current_set += 1
         self.plotter.clear()
         if math.isnan(vg):
-            txt = f"Set {self._current_set}/{self._total_sets}  |  Vd={vd:.2f} V"
+            txt = f"Set {self._current_set}/{self._total_sets}\nVd={vd:.2f}V"
         else:
-            txt = f"Set {self._current_set}/{self._total_sets}  |  Vg={vg:.2f} V"
+            txt = f"Set {self._current_set}/{self._total_sets}\nVg={vg:.2f}V"
         self.progress_lbl.setText(txt)
 
     def _on_point_progress(self, txt: str):
         if not self.multi_cb.isChecked():
             self.progress_lbl.setText(txt)
+
+    def _calculate_time_estimate(self):
+        """Calculate time estimate for Output measurements."""
+        try:
+            # Calculate number of points
+            vd_points = int(abs(self.vd_stop_sb.value() - self.vd_start_sb.value()) / self.vd_step_sb.value()) + 1
+            
+            if self.multi_cb.isChecked():
+                vg_points = int(abs(self.vg_stop_sb.value() - self.vg_start_sb.value()) / self.vg_step_sb.value()) + 1
+            else:
+                vg_points = 1
+            
+            # Use validator to estimate time
+            time_info = SweepValidator.estimate_measurement_time(
+                self.advanced_settings, vd_points, vg_points, 1
+            )
+            
+            self.time_estimate_label.setText(f"Estimated time: {time_info['total_time_formatted']}")
+            
+        except Exception:
+            self.time_estimate_label.setText("Estimated time: --")
 
 
 class CalculationTab(QtWidgets.QWidget):
@@ -791,8 +1176,8 @@ class CalculationTab(QtWidgets.QWidget):
         # Push everything up and leave space at the bottom
         control_vlayout.addStretch()
         
-        # Set fixed width for control panel
-        self.control_panel.setMaximumWidth(300)
+        # Set fixed width for control panel to prevent expansion
+        self.control_panel.setFixedWidth(320)
         hlayout.addWidget(self.control_panel, 0)
         
         # ------------------------------------------------------------------
@@ -1107,8 +1492,11 @@ class CalculationTab(QtWidgets.QWidget):
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("FET Characterization")
+        self.setWindowTitle(f"FET Characterization Tool v{__version__}")
         self.resize(1100, 750)
+
+        # Create menu bar
+        self._create_menu_bar()
 
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
@@ -1161,6 +1549,57 @@ class MainWindow(QtWidgets.QMainWindow):
         # Initialize backgate dropdowns empty
         for tab in (self.output_tab, self.transfer_tab):
             tab.refresh_backgate_options([])
+
+    # --------------------------------------------------------------
+    def _create_menu_bar(self):
+        """Create the application menu bar."""
+        menubar = self.menuBar()
+        
+        # Help menu
+        help_menu = menubar.addMenu("&Help")
+        
+        # About action
+        about_action = QtWidgets.QAction("&About", self)
+        about_action.setShortcut("F1")
+        about_action.triggered.connect(self._show_about_dialog)
+        help_menu.addAction(about_action)
+
+    def _show_about_dialog(self):
+        """Show the About dialog with version and feature information."""
+        version_info = get_version_info()
+        
+        about_text = f"""
+        <h2>{version_info['description']}</h2>
+        <p><b>Version:</b> {version_info['version']}</p>
+        <p><b>Author:</b> {version_info['author']}</p>
+        
+        <h3>Features:</h3>
+        <ul>
+        <li>Output and Transfer curve measurements</li>
+        <li>Real-time plotting with PyQtGraph</li>
+        <li>Keithley 2401 and 2635A instrument support</li>
+        <li>Demo mode with mock instruments</li>
+        <li>CSV data export with timestamps</li>
+        <li>Mobility calculation from transconductance</li>
+        <li>Linear region analysis with statistics</li>
+        <li>Multi-voltage measurement support</li>
+        </ul>
+        
+        <h3>Supported Instruments:</h3>
+        <ul>
+        <li>Keithley 2401 SourceMeter (Drain/Source)</li>
+        <li>Keithley 2635A SourceMeter (Back-gate)</li>
+        </ul>
+        
+        <p><b>Built with:</b> Python, PyQt5, PyQtGraph, NumPy, SciPy, Pandas</p>
+        <p><small>© 2025 - FET Characterization Tool</small></p>
+        """
+        
+        msg_box = QtWidgets.QMessageBox(self)
+        msg_box.setWindowTitle("About FET Characterization Tool")
+        msg_box.setText(about_text)
+        msg_box.setIcon(QtWidgets.QMessageBox.Information)
+        msg_box.exec_()
 
     # --------------------------------------------------------------
     def _open_device_dialog(self):

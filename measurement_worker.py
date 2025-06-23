@@ -26,13 +26,14 @@ class SweepParameters:
     vg_stop: float
     vg_step: float
     stabilization_s: float = 0.2
-    repeats: int = 1
     csv_path: Union[str, Path] = Path("measurement.csv")
     separate_files: bool = False  # if True, one CSV per outer loop value
     outer_label: str = "Vg"  # label used in filename
     outer_first_gate: bool = True  # if True, outer loop is gate, else drain
     dwell_s: float = 0.05  # delay after setting drain before measurement
     nplc: float = 1.0
+    drain_compliance: float = 0.1  # Drain current compliance (A)
+    gate_compliance: float = 1e-6  # Gate current compliance (A)
 
 
 class MeasurementWorker(QtCore.QThread):
@@ -58,6 +59,19 @@ class MeasurementWorker(QtCore.QThread):
                     drv.set_nplc(self.params.nplc)
                 except Exception:
                     pass
+        
+        # configure compliance current limits
+        if hasattr(self.drain, "set_compliance"):
+            try:
+                self.drain.set_compliance(self.params.drain_compliance)
+            except Exception:
+                pass
+                
+        if hasattr(self.gate, "set_compliance"):
+            try:
+                self.gate.set_compliance(self.params.gate_compliance)  
+            except Exception:
+                pass
 
     # --------------------------------------------------------------
     def stop(self):
@@ -84,62 +98,61 @@ class MeasurementWorker(QtCore.QThread):
                     outer_vals, inner_vals = vd_values, vg_values
                     outer_is_gate = False
 
-                total_points = len(outer_vals) * len(inner_vals) * self.params.repeats
+                total_points = len(outer_vals) * len(inner_vals)
                 point_count = 0
 
-                for _ in range(self.params.repeats):
-                    for outer in outer_vals:
+                for outer in outer_vals:
+                    if not self._running:
+                        raise RuntimeError("Measurement stopped by user")
+                    if outer_is_gate:
+                        self.gate.set_voltage(outer)
+                    else:
+                        self.drain.set_voltage(outer)
+                    time.sleep(self.params.stabilization_s)
+
+                    # open new file if separate_files True
+                    if self.params.separate_files:
+                        fp.close()
+                        vlabel_val = outer
+                        vlabel = f"{self.params.outer_label}_{vlabel_val:.2f}V".replace(".", "p")
+                        csv_file = Path(self.params.csv_path)
+                        stem = csv_file.stem
+                        new_path = csv_file.parent / f"{stem}_{vlabel}{csv_file.suffix}"
+                        fp = new_path.open("w", newline="")
+                        writer = csv.writer(fp)
+                        writer.writerow(["Vg", "Vd", "Id (A)"])
+
+                    # notify new gate set started
+                    if outer_is_gate:
+                        self.set_started.emit(outer, math.nan)
+                    else:
+                        self.set_started.emit(math.nan, outer)
+
+                    for inner in inner_vals:
                         if not self._running:
                             raise RuntimeError("Measurement stopped by user")
                         if outer_is_gate:
-                            self.gate.set_voltage(outer)
+                            vd = inner
+                            self.drain.set_voltage(vd)
+                            vg_cur = outer
                         else:
-                            self.drain.set_voltage(outer)
-                        time.sleep(self.params.stabilization_s)
+                            vg_cur = inner
+                            vd = outer
+                            self.gate.set_voltage(vg_cur)
+                        time.sleep(0.05)
+                        time.sleep(self.params.dwell_s)
+                        try:
+                            id_val = self.drain.measure_current()
+                        except Exception as e:
+                            self.error.emit(f"Measurement error: {e}")
+                            raise
 
-                        # open new file if separate_files True
-                        if self.params.separate_files:
-                            fp.close()
-                            vlabel_val = outer
-                            vlabel = f"{self.params.outer_label}_{vlabel_val:.2f}V".replace(".", "p")
-                            csv_file = Path(self.params.csv_path)
-                            stem = csv_file.stem
-                            new_path = csv_file.parent / f"{stem}_{vlabel}{csv_file.suffix}"
-                            fp = new_path.open("w", newline="")
-                            writer = csv.writer(fp)
-                            writer.writerow(["Vg", "Vd", "Id (A)"])
+                        self.data_ready.emit(vg_cur, vd, id_val)
+                        writer.writerow([vg_cur, vd, id_val])
+                        fp.flush()
 
-                        # notify new gate set started
-                        if outer_is_gate:
-                            self.set_started.emit(outer, math.nan)
-                        else:
-                            self.set_started.emit(math.nan, outer)
-
-                        for inner in inner_vals:
-                            if not self._running:
-                                raise RuntimeError("Measurement stopped by user")
-                            if outer_is_gate:
-                                vd = inner
-                                self.drain.set_voltage(vd)
-                                vg_cur = outer
-                            else:
-                                vg_cur = inner
-                                vd = outer
-                                self.gate.set_voltage(vg_cur)
-                            time.sleep(0.05)
-                            time.sleep(self.params.dwell_s)
-                            try:
-                                id_val = self.drain.measure_current()
-                            except Exception as e:
-                                self.error.emit(f"Measurement error: {e}")
-                                raise
-
-                            self.data_ready.emit(vg_cur, vd, id_val)
-                            writer.writerow([vg_cur, vd, id_val])
-                            fp.flush()
-
-                            point_count += 1
-                            self.progress.emit(f"{point_count}/{total_points} points done")
+                        point_count += 1
+                        self.progress.emit(f"{point_count}/{total_points} points done")
         except Exception as exc:
             if not isinstance(exc, RuntimeError):
                 self.error.emit(str(exc))

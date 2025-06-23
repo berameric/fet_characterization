@@ -76,6 +76,12 @@ class Keithley2401:
     def output_off(self) -> None:
         self.write(":OUTP OFF")
 
+    def set_compliance(self, compliance: float) -> None:
+        """Set current compliance limit (in Amperes)."""
+        if self.demo:
+            return
+        self.write(f":SENS:CURR:PROT {compliance}")
+
     # ------------------------------------------------------------------
     # Public API used by measurement thread
     # ------------------------------------------------------------------
